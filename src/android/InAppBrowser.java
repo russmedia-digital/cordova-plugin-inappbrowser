@@ -928,44 +928,49 @@ public class InAppBrowser extends CordovaPlugin {
                 // WebView
                 inAppWebView = new WebView(cordova.getActivity());
                 inAppWebView.setLayoutParams(new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-                
-                // ===== START CAMERA PERMISSION MODIFICATIONS =====
-                // Enable camera in WebView settings
+                inAppWebView.setId(Integer.valueOf(6));
+
+                // Initialize WebSettings once
                 WebSettings settings = inAppWebView.getSettings();
+
+                // ===== GENERAL WEBVIEW SETTINGS =====
+                settings.setJavaScriptEnabled(true);
+                settings.setJavaScriptCanOpenWindowsAutomatically(true);
+                settings.setBuiltInZoomControls(showZoomControls);
+                settings.setPluginState(WebSettings.PluginState.ON);
+                settings.setLoadWithOverviewMode(true);
+                settings.setUseWideViewPort(useWideViewPort);
+                settings.setSupportMultipleWindows(true); // Mitigate Chromium security bug
+
+                // ===== CAMERA/MEDIA PERMISSION SETTINGS =====
                 settings.setMediaPlaybackRequiresUserGesture(false);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                    settings.setMediaPlaybackRequiresUserGesture(false);
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     // Allow camera and microphone in WebView
                     CookieManager.getInstance().setAcceptThirdPartyCookies(inAppWebView, true);
                     settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
                 }
-                // ===== END CAMERA PERMISSION MODIFICATIONS =====
 
-                inAppWebView.setId(Integer.valueOf(6));
-                // File Chooser Implemented ChromeClient
+             // ===== WEBVIEW CLIENTS =====
+                // File Chooser and Permission Handler
                 inAppWebView.setWebChromeClient(new InAppChromeClient(thatWebView) {
-                    public boolean onShowFileChooser (WebView webView, ValueCallback<Uri[]> filePathCallback, WebChromeClient.FileChooserParams fileChooserParams)
-                    {
+                    public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, 
+                            WebChromeClient.FileChooserParams fileChooserParams) {
                         LOG.d(LOG_TAG, "File Chooser 5.0+");
-                        // If callback exists, finish it.
-                        if(mUploadCallback != null) {
+                        if (mUploadCallback != null) {
                             mUploadCallback.onReceiveValue(null);
                         }
                         mUploadCallback = filePathCallback;
                         
-                        // File chooser implementation to show camera, camcorder and file browser as option to choose from
                         String applicationId = (String) BuildHelper.getBuildConfigValue(cordova.getActivity(), "APPLICATION_ID");
                         applicationId = preferences.getString("applicationId", applicationId);
 
-                        // camera intent
+                        // Camera intent
                         Intent pictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
                         tempImageFile = createTempFile(".jpg");
                         Uri intentCameraOutputUri = FileProvider.getUriForFile(cordova.getActivity(), applicationId + ".fileprovider", tempImageFile);
                         pictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, intentCameraOutputUri);
 
-                        // video intent
+                        // Video intent
                         Intent videoIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
                         
                         // Files intent
@@ -977,40 +982,48 @@ public class InAppBrowser extends CordovaPlugin {
                         Intent[] intentArray = new Intent[]{pictureIntent, videoIntent, contentSelectionIntent};
 
                         Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
-                        chooserIntent.putExtra(Intent.EXTRA_INTENT, pictureIntent);
-                        chooserIntent.putExtra(Intent.EXTRA_INTENT, videoIntent);
-                        chooserIntent.putExtra(Intent.EXTRA_INTENT, contentSelectionIntent);
                         chooserIntent.putExtra(Intent.EXTRA_TITLE, "Choose an action");
                         chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentArray);
                         cordova.startActivityForResult(InAppBrowser.this, chooserIntent, FILECHOOSER_REQUESTCODE);
-                        return true;                    }
+                        return true;
+                    }
 
-                    // ===== ADD PERMISSION REQUEST HANDLER =====
                     @TargetApi(Build.VERSION_CODES.LOLLIPOP)
                     @Override
                     public void onPermissionRequest(final PermissionRequest request) {
                         cordova.getActivity().runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                // Grant all permissions (camera/mic/etc)
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                    request.grant(request.getResources());
+                                    request.grant(request.getResources()); // Grant camera/mic permissions
                                 }
                             }
                         });
                     }
-                    // ===== END PERMISSION REQUEST HANDLER =====
                 });
 
+                // Set WebView Client
                 currentClient = new InAppBrowserClient(thatWebView, edittext, beforeload);
                 inAppWebView.setWebViewClient(currentClient);
-                WebSettings settings = inAppWebView.getSettings();
-                settings.setJavaScriptEnabled(true);
-                settings.setJavaScriptCanOpenWindowsAutomatically(true);
-                settings.setBuiltInZoomControls(showZoomControls);
-                settings.setPluginState(android.webkit.WebSettings.PluginState.ON);
-                
-                // download event
+
+                // ===== FINAL SETUP =====
+                inAppWebView.requestFocus();
+                inAppWebView.requestFocusFromTouch();
+
+                // Download listener
+                inAppWebView.setDownloadListener(new DownloadListener() {
+                    public void onDownloadStart(String url, String userAgent, 
+                            String contentDisposition, String mimetype, long contentLength) {
+                        try {
+                            JSONObject succObj = new JSONObject();
+                            succObj.put("type", DOWNLOAD_EVENT);
+                            succObj.put("url", url);
+                            // ... (rest of download handling code)
+                        } catch(Exception e) {
+                            LOG.e(LOG_TAG, e.getMessage());
+                        }
+                    }
+                });
                 
                 inAppWebView.setDownloadListener(
                     new DownloadListener(){
