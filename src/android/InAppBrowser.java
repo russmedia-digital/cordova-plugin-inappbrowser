@@ -128,6 +128,9 @@ public class InAppBrowser extends CordovaPlugin {
     private static final String FULLSCREEN = "fullscreen";
 
     private static final int TOOLBAR_HEIGHT = 48;
+    private static final int CAMERA_PERMISSION_REQUEST_CODE = 1001;
+    private PermissionRequest pendingPermissionRequest;
+
 
     private static final List customizableOptions = Arrays.asList(CLOSE_BUTTON_CAPTION, TOOLBAR_COLOR, NAVIGATION_COLOR, CLOSE_BUTTON_COLOR, FOOTER_COLOR);
 
@@ -925,7 +928,7 @@ public class InAppBrowser extends CordovaPlugin {
                 View footerClose = createCloseButton(7);
                 footer.addView(footerClose);
 
-                // WebView
+               // WebView initialization
                 inAppWebView = new WebView(cordova.getActivity());
                 inAppWebView.setLayoutParams(new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
                 inAppWebView.setId(Integer.valueOf(6));
@@ -937,10 +940,19 @@ public class InAppBrowser extends CordovaPlugin {
                 settings.setJavaScriptEnabled(true);
                 settings.setJavaScriptCanOpenWindowsAutomatically(true);
                 settings.setBuiltInZoomControls(showZoomControls);
-                settings.setPluginState(WebSettings.PluginState.ON);
                 settings.setLoadWithOverviewMode(true);
                 settings.setUseWideViewPort(useWideViewPort);
                 settings.setSupportMultipleWindows(true); // Mitigate Chromium security bug
+                settings.setDomStorageEnabled(true);
+                settings.setDatabaseEnabled(true);
+
+                // Configure database path if enabled
+                Bundle appSettings = cordova.getActivity().getIntent().getExtras();
+                boolean enableDatabase = appSettings == null ? true : appSettings.getBoolean("InAppBrowserStorageEnabled", true);
+                if (enableDatabase) {
+                    String databasePath = cordova.getActivity().getApplicationContext().getDir("inAppBrowserDB", Context.MODE_PRIVATE).getPath();
+                    settings.setDatabasePath(databasePath);
+                }
 
                 // ===== CAMERA/MEDIA PERMISSION SETTINGS =====
                 settings.setMediaPlaybackRequiresUserGesture(false);
@@ -950,37 +962,40 @@ public class InAppBrowser extends CordovaPlugin {
                     settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
                 }
 
-             // ===== WEBVIEW CLIENTS =====
-                // File Chooser and Permission Handler
+                // ===== WEBVIEW CLIENTS =====
                 inAppWebView.setWebChromeClient(new InAppChromeClient(thatWebView) {
+                    @Override
                     public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, 
                             WebChromeClient.FileChooserParams fileChooserParams) {
                         LOG.d(LOG_TAG, "File Chooser 5.0+");
+                        
+                        // Cancel any existing callback
                         if (mUploadCallback != null) {
                             mUploadCallback.onReceiveValue(null);
                         }
                         mUploadCallback = filePathCallback;
                         
+                        // Prepare intents for camera, video and file selection
                         String applicationId = (String) BuildHelper.getBuildConfigValue(cordova.getActivity(), "APPLICATION_ID");
                         applicationId = preferences.getString("applicationId", applicationId);
 
                         // Camera intent
                         Intent pictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
                         tempImageFile = createTempFile(".jpg");
-                        Uri intentCameraOutputUri = FileProvider.getUriForFile(cordova.getActivity(), applicationId + ".fileprovider", tempImageFile);
+                        Uri intentCameraOutputUri = FileProvider.getUriForFile(cordova.getActivity(), 
+                            applicationId + ".fileprovider", tempImageFile);
                         pictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, intentCameraOutputUri);
 
                         // Video intent
                         Intent videoIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
                         
-                        // Files intent
-
+                        // File selection intent
                         Intent contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
                         contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
                         contentSelectionIntent.setType("*/*");
 
+                        // Combine all options
                         Intent[] intentArray = new Intent[]{pictureIntent, videoIntent, contentSelectionIntent};
-
                         Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
                         chooserIntent.putExtra(Intent.EXTRA_TITLE, "Choose an action");
                         chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentArray);
@@ -995,7 +1010,25 @@ public class InAppBrowser extends CordovaPlugin {
                             @Override
                             public void run() {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                    request.grant(request.getResources()); // Grant camera/mic permissions
+                                    // Check for required permissions
+                                    boolean hasCameraPermission = cordova.hasPermission(Manifest.permission.CAMERA);
+                                    boolean hasAudioPermission = cordova.hasPermission(Manifest.permission.RECORD_AUDIO);
+                                    
+                                    // Grant only the permissions we actually have
+                                    List<String> grantedResources = new ArrayList<>();
+                                    for (String resource : request.getResources()) {
+                                        if (resource.equals(PermissionRequest.RESOURCE_VIDEO_CAPTURE) && hasCameraPermission) {
+                                            grantedResources.add(resource);
+                                        } else if (resource.equals(PermissionRequest.RESOURCE_AUDIO_CAPTURE) && hasAudioPermission) {
+                                            grantedResources.add(resource);
+                                        }
+                                    }
+                                    
+                                    if (!grantedResources.isEmpty()) {
+                                        request.grant(grantedResources.toArray(new String[0]));
+                                    } else {
+                                        request.deny();
+                                    }
                                 }
                             }
                         });
@@ -1006,11 +1039,7 @@ public class InAppBrowser extends CordovaPlugin {
                 currentClient = new InAppBrowserClient(thatWebView, edittext, beforeload);
                 inAppWebView.setWebViewClient(currentClient);
 
-                // ===== FINAL SETUP =====
-                inAppWebView.requestFocus();
-                inAppWebView.requestFocusFromTouch();
-
-                // Download listener
+                // Configure download listener
                 inAppWebView.setDownloadListener(new DownloadListener() {
                     public void onDownloadStart(String url, String userAgent, 
                             String contentDisposition, String mimetype, long contentLength) {
@@ -1018,34 +1047,16 @@ public class InAppBrowser extends CordovaPlugin {
                             JSONObject succObj = new JSONObject();
                             succObj.put("type", DOWNLOAD_EVENT);
                             succObj.put("url", url);
-                            // ... (rest of download handling code)
+                            succObj.put("userAgent", userAgent);
+                            succObj.put("contentDisposition", contentDisposition);
+                            succObj.put("mimetype", mimetype);
+                            succObj.put("contentLength", contentLength);
+                            sendUpdate(succObj, true);
                         } catch(Exception e) {
                             LOG.e(LOG_TAG, e.getMessage());
                         }
                     }
                 });
-                
-                inAppWebView.setDownloadListener(
-                    new DownloadListener(){
-                        public void onDownloadStart(
-                                String url, String userAgent, String contentDisposition, String mimetype, long contentLength
-                        ){
-                            try{
-                                JSONObject succObj = new JSONObject();
-                                succObj.put("type", DOWNLOAD_EVENT);
-                                succObj.put("url",url);
-                                succObj.put("userAgent",userAgent);
-                                succObj.put("contentDisposition",contentDisposition);
-                                succObj.put("mimetype",mimetype);
-                                succObj.put("contentLength",contentLength);
-                                sendUpdate(succObj, true);
-                            }
-                            catch(Exception e){
-                                LOG.e(LOG_TAG,e.getMessage());
-                            }
-                        }
-                    }
-                );        
 
                 // Add postMessage interface
                 class JsObject {
@@ -1062,12 +1073,13 @@ public class InAppBrowser extends CordovaPlugin {
                     }
                 }
 
+                // Final configuration
                 settings.setMediaPlaybackRequiresUserGesture(mediaPlaybackRequiresUserGesture);
                 inAppWebView.addJavascriptInterface(new JsObject(), "cordova_iab");
 
+                // Handle user agent settings
                 String overrideUserAgent = preferences.getString("OverrideUserAgent", null);
                 String appendUserAgent = preferences.getString("AppendUserAgent", null);
-
                 if (overrideUserAgent != null) {
                     settings.setUserAgentString(overrideUserAgent);
                 }
@@ -1075,26 +1087,20 @@ public class InAppBrowser extends CordovaPlugin {
                     settings.setUserAgentString(settings.getUserAgentString() + " " + appendUserAgent);
                 }
 
-                //Toggle whether this is enabled or not!
-                Bundle appSettings = cordova.getActivity().getIntent().getExtras();
-                boolean enableDatabase = appSettings == null ? true : appSettings.getBoolean("InAppBrowserStorageEnabled", true);
-                if (enableDatabase) {
-                    String databasePath = cordova.getActivity().getApplicationContext().getDir("inAppBrowserDB", Context.MODE_PRIVATE).getPath();
-                    settings.setDatabasePath(databasePath);
-                    settings.setDatabaseEnabled(true);
-                }
-                settings.setDomStorageEnabled(true);
-
+                // Cache management
                 if (clearAllCache) {
                     CookieManager.getInstance().removeAllCookie();
                 } else if (clearSessionCache) {
                     CookieManager.getInstance().removeSessionCookie();
                 }
 
-                // Enable Thirdparty Cookies
-                CookieManager.getInstance().setAcceptThirdPartyCookies(inAppWebView,true);
+                // Enable third-party cookies
+                CookieManager.getInstance().setAcceptThirdPartyCookies(inAppWebView, true);
 
+                // Load the URL
                 inAppWebView.loadUrl(url);
+                inAppWebView.requestFocus();
+                inAppWebView.requestFocusFromTouch();
                 inAppWebView.setId(Integer.valueOf(6));
                 inAppWebView.getSettings().setLoadWithOverviewMode(true);
                 inAppWebView.getSettings().setUseWideViewPort(useWideViewPort);
