@@ -54,13 +54,6 @@
             <uses-feature android:name="android.hardware.camera.any" android:required="false" />
         </config-file>
 
-        <!-- FileProvider Configuration -->
-        <config-file target="AndroidManifest.xml" parent="/manifest/application">
-            <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true">
-                <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
-            </provider>
-        </config-file>
-
         <!-- Source Files -->
         <source-file src="src/android/InAppBrowser.java" target-dir="src/org/apache/cordova/inappbrowser" />
         <source-file src="src/android/InAppBrowserDialog.java" target-dir="src/org/apache/cordova/inappbrowser" />
