@@ -30,6 +30,7 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 import android.graphics.Color;
+import android.Manifest;
 import android.net.http.SslError;
 import android.net.Uri;
 import android.os.Build;
@@ -1011,8 +1012,8 @@ public class InAppBrowser extends CordovaPlugin {
                             public void run() {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                     // Check for required permissions
-                                    boolean hasCameraPermission = cordova.hasPermission(Manifest.permission.CAMERA);
-                                    boolean hasAudioPermission = cordova.hasPermission(Manifest.permission.RECORD_AUDIO);
+                                    boolean hasCameraPermission = cordova.hasPermission(android.Manifest.permission.CAMERA);
+                                    boolean hasAudioPermission = cordova.hasPermission(android.Manifest.permission.RECORD_AUDIO);
                                     
                                     // Grant only the permissions we actually have
                                     List<String> grantedResources = new ArrayList<>();
