@@ -109,10 +109,4 @@
         </js-module>
     </platform>
 
-    <!-- Windows -->
-    <platform name="windows">
-        <js-module src="www/inappbrowser.js" name="inappbrowser">
-            <clobbers target="cordova.InAppBrowser.open" />
-        </js-module>
-    </platform>
 </plugin>
